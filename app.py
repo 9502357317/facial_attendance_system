@@ -1,8 +1,8 @@
-from flask import Flask, render_template, request, redirect, url_for
+from flask import Flask, render_template, Response
 import cv2
 import numpy as np
 import tensorflow as tf
-import sqlite3
+from database import init_db, mark_attendance, get_attendance
 from datetime import datetime
 
 app = Flask(__name__)
@@ -10,14 +10,12 @@ app = Flask(__name__)
 # Load the trained model
 model = tf.keras.models.load_model("models/face_recognition.h5")
 
-# Database setup
-def init_db():
-    conn = sqlite3.connect('attendance.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS attendance
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, time TEXT)''')
-    conn.commit()
-    conn.close()
+# Load label names (student names)
+label_names = ["Student1", "Student2", "Student3", "Student4", "Student5",
+               "Student6", "Student7", "Student8", "Student9", "Student10"]
+
+# Initialize database
+init_db()
 
 # Recognize face
 def recognize_face(image):
@@ -29,42 +27,38 @@ def recognize_face(image):
     prediction = model.predict(image)
     return np.argmax(prediction)
 
-# Mark attendance
-def mark_attendance(name):
-    conn = sqlite3.connect('attendance.db')
-    c = conn.cursor()
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("INSERT INTO attendance (name, time) VALUES (?, ?)", (name, current_time))
-    conn.commit()
-    conn.close()
+# Video feed generator
+def generate_frames():
+    cap = cv2.VideoCapture(0)
+    while True:
+        success, frame = cap.read()
+        if not success:
+            break
+        else:
+            # Detect faces
+            face_locations = face_recognition.face_locations(frame)
+            for (top, right, bottom, left) in face_locations:
+                face_image = frame[top:bottom, left:right]
+                student_id = recognize_face(face_image)
+                student_name = label_names[student_id]
+                mark_attendance(student_name)
+                cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                cv2.putText(frame, student_name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+            ret, buffer = cv2.imencode('.jpg', frame)
+            frame = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n\r\n')
 
 # Home page
 @app.route('/')
 def index():
-    return render_template('index.html')
+    records = get_attendance()
+    return render_template('index.html', records=records)
 
-# Video feed
+# Video feed route
 @app.route('/video_feed')
 def video_feed():
-    cap = cv2.VideoCapture(0)
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        # Recognize faces and mark attendance
-        face_locations = face_recognition.face_locations(frame)
-        for (top, right, bottom, left) in face_locations:
-            face_image = frame[top:bottom, left:right]
-            student_id = recognize_face(face_image)
-            student_name = label_names[student_id]
-            mark_attendance(student_name)
-            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-            cv2.putText(frame, student_name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-        ret, jpeg = cv2.imencode('.jpg', frame)
-        frame = jpeg.tobytes()
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n\r\n')
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    init_db()
     app.run(debug=True)
