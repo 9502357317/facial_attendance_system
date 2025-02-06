@@ -4,6 +4,7 @@ import numpy as np
 import tensorflow as tf
 from database import init_db, mark_attendance, get_attendance
 from datetime import datetime
+from pyngrok import ngrok
 
 app = Flask(__name__)
 
@@ -61,4 +62,7 @@ def video_feed():
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # Start ngrok tunnel
+    public_url = ngrok.connect(5000).public_url
+    print(" * Running on", public_url)
+    app.run(host='0.0.0.0', port=5000)
